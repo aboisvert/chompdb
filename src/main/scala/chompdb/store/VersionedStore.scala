@@ -1,6 +1,9 @@
 package chompdb.store
 
+import chompdb.DatabaseVersionShard
 import f1lesystem.FileSystem
+import java.io._
+import java.util.Properties
 
 object VersionedStore {
   val versionSuffix = ".version"
@@ -19,6 +22,42 @@ trait VersionedStore {
 
   def mostRecentVersion: Option[Long] = versions.headOption
 
+  def countShardsInVersion(version: Long): Int = versionPath(version)
+    .listFiles
+    .map(_.filename)
+    .filter(_.endsWith(".blob"))
+    .size
+
+  def getVersionShards(): Set[DatabaseVersionShard] = VersionedStore.this.versions
+    .map { version => VersionedStore.this
+      .versionPath(version)
+      .listFiles
+      .filter(_.extension == "blob")
+      .map { blobFile => 
+        DatabaseVersionShard(
+          version,
+          blobFile.basename.toInt,
+          blobFile,
+          blobFile.parent / (blobFile.basename + "index")
+        )
+      }
+    }
+    .map(_.toSet)
+    .fold(Set[DatabaseVersionShard]())(_ ++ _)
+
+  def getVersionShards(version: Long): Set[DatabaseVersionShard] = versionPath(version)
+    .listFiles
+    .filter(_.extension == "blob")
+    .map { blobFile => 
+      DatabaseVersionShard(
+        version,
+        blobFile.basename.toInt,
+        blobFile,
+        blobFile.parent / (blobFile.basename + ".index")
+      )
+    }
+    .toSet
+
   def createVersion(version: Long = System.currentTimeMillis): fs.Dir = {
     if (versions contains version) throw new RuntimeException("Version already exists")
     val path = versionPath(version)
@@ -32,8 +71,18 @@ trait VersionedStore {
     versionMarker(version).delete()
   }
 
-  def succeedVersion(version: Long) {
+  def succeedVersion(version: Long, shardsTotal: Int) {
     versionMarker(version).touch()
+    val files = versionPath(version).listFiles
+    val marker = versionMarker(version)
+
+    val props = new Properties()
+    props.put("shardsTotal", shardsTotal.toString)
+    props.put("fileManifest", files.toString)
+
+    // TODO: .write and .store are both void functions, figure out how to nest them
+    val fileOutputStream = new FileOutputStream(marker.fullpath)
+    props.store(fileOutputStream, "")
   }
 
   def cleanup(versionsToKeep: Int) {
