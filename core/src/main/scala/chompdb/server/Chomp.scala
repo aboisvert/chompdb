@@ -19,6 +19,17 @@ case class DatabaseNotServedException(smth: String) extends Exception
 case class ShardsNotFoundException(smth: String) extends Exception
 case class VersionNotFoundException(smth: String) extends Exception
 
+trait SerializableMapReduce[T, U] extends MapReduce[T, U] {
+  /** Serializer-deserializer for this instance */
+  def serde: SerDe[MapReduce[T, U]]
+
+  /** Serializer-deserializer for type parameter T */
+  def serde_T: SerDe[T] 
+
+  /** Serializer-deserializer for type parameter U */
+  def serde_U: SerDe[U] 
+}
+
 object Chomp {
   class LocalNodeProtocol(node: Node, chomp: Chomp) extends NodeProtocol {
     override def availableShards(catalog: String, database: String): Set[VersionShard] =
@@ -71,7 +82,7 @@ object Chomp {
   }
 }
 
-abstract class Chomp extends SlapChop {
+abstract class Chomp {
   val databases: Seq[Database]
   val localNode: Node
   val nodes: Map[Node, Endpoint]
@@ -215,7 +226,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
     pc
   }
 
-  override def mapReduce[T: TypeTag](catalog: String, database: String, keys: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]) = {
+  def mapReduce[T](catalog: String, database: String, keys: Seq[Long], mapReduce: SerializableMapReduce[ByteBuffer, T]): T = {
     val blobDatabase = databases
       .find { db => db.catalog.name == catalog && db.name == database }
       .getOrElse { throw new DatabaseNotFoundException("Database $database$ not found.") }
@@ -246,9 +257,9 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
     }
 
     parMap(keysToNodes) map { case (node, ids) =>
-      wrapErrors{
+      wrapErrors {
         val serializedResult = nodeProtocol(node).mapReduce(catalog, database, version, ids, serializeMapReduce(mapReduce))
-        deserializeMapReduceResult[T](serializedResult)
+        mapReduce.serde_U.deserialize(serializedResult)
       }
     } reduce { (t1, t2) =>
       wrapErrors {
