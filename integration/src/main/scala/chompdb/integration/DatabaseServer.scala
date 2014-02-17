@@ -36,7 +36,7 @@ trait DatabaseServer extends Chomp {
 
   override def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _] = {
     mapReduce match {
-      case "mapReduce" => DatabaseClient.CollectVersions 
+      case "mapReduce" => DatabaseClient.CollectVersions
     }
   }
 

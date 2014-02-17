@@ -18,12 +18,12 @@ class FileStoreTest extends WordSpec with ShouldMatchers with BeforeAndAfter {
 
   val tmpRoot = LocalFileSystem.tempRoot(testName) /+ "local"
   val tmpFile = tmpRoot.parent.get / "filestore"
-  
+
   before {
     tmpRoot.deleteRecursively()
     tmpRoot.mkdir()
   }
-  
+
   "FileStore" should {
     "write and read back data" in {
       val writer = new FileStore.Writer {

@@ -14,7 +14,7 @@ object FileStore {
 
     lazy val blobFile  = file("blob")
     lazy val indexFile = file("index")
-    
+
     def storeFiles = Seq(blobFile, indexFile)
   }
 

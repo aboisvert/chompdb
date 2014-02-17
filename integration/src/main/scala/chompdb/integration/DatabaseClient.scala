@@ -31,7 +31,7 @@ object DatabaseClient {
 
 trait DatabaseClient {
   import DatabaseClient._
-  
+
   val delayBetweenQueries: Duration
 
   val blocksPerQueryRange: (Int, Int)
@@ -59,13 +59,13 @@ trait DatabaseClient {
           val (db, dbParams) = pick(params.databases)
           val randomServer = random.pick(servers)
           try {
-	          println(s"Client $i querying server $randomServer database $db...")
-	          val keys = {
-	            val n = randomInt(blocksPerQueryRange._1, blocksPerQueryRange._2)
-	            (1 to n) map { _ => randomLong(0, dbParams.nElements) }
-	          }
-	          val result = randomServer.mapReduce(db.catalog.name, db.name, keys, CollectVersions)
-	          println(s"Client $i mapReduce result: $result")
+            println(s"Client $i querying server $randomServer database $db...")
+            val keys = {
+              val n = randomInt(blocksPerQueryRange._1, blocksPerQueryRange._2)
+              (1 to n) map { _ => randomLong(0, dbParams.nElements) }
+            }
+            val result = randomServer.mapReduce(db.catalog.name, db.name, keys, CollectVersions)
+            println(s"Client $i mapReduce result: $result")
           } catch { case e: Throwable =>
             e.printStackTrace()
           }

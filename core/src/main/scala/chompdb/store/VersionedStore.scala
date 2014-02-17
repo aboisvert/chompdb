@@ -28,7 +28,7 @@ trait VersionedStore {
     .listFiles
     .filter(_.extension == "shard")
     .map { _.basename.toInt }
-    .toSet 
+    .toSet
 
   def createVersion(version: Long = System.currentTimeMillis): FileSystem#Dir = {
     if (versions contains version) throw new RuntimeException("Version already exists")

@@ -36,7 +36,7 @@ class HashRing(chomp: Chomp) {
 
         assembleNodeSet(Set.empty[Node], chomp.replicationFactor, shardHashValue)
       }
-    } 
+    }
   }
 
   def initialize(nodes: Set[Node]) {

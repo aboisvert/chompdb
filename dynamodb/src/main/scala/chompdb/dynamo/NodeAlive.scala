@@ -22,19 +22,19 @@ object DynamoNodeAlive {
 
   val nodeId = new NamedAttribute[String]("nodeId") with Required
   val ts = new NamedAttribute[String]("ts") with Required
-  
+
   trait AliveTable extends Table[NodeTimestamp] with HashKeyTable[String, NodeTimestamp] {
     override val hashKeyAttribute = nodeId
-  
+
     override val itemMapper = new ItemMapper[NodeTimestamp] {
       override def apply(value: NodeTimestamp): Map[String, AttributeValue] = {
         nodeId.apply(value.node.id) ++ ts.apply(value.ts.toString)
       }
-  
+
       override def unapply(attributes: Map[String, AttributeValue]): NodeTimestamp = {
         NodeTimestamp(Node(nodeId.get(attributes)), ts.get(attributes).toLong)
       }
-    } 
+    }
   }
 }
 
@@ -44,13 +44,13 @@ trait DynamoNodeAlive extends NodeAlive {
   val logger: Logger = new ConsoleLogger {}
 
   val tableName: String
-  
+
   val gracePeriod: Duration
-  
+
   protected val dynamoDB: AmazonDynamoDB
-  
+
   protected val retryPolicy = new FibonacciBackoff((10, SECONDS), logger)
-  
+
   val table = new AliveTable {
     override val dynamoDB = DynamoNodeAlive.this.dynamoDB
     override val retryPolicy = DynamoNodeAlive.this.retryPolicy

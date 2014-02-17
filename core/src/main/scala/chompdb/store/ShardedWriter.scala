@@ -31,7 +31,7 @@ trait ShardedWriter extends Store.Writer {
   private[chompdb] var currentWriterIndex = 0
 
   def shardFiles: Seq[FileStore.StoreFiles] = shardWriters
-  
+
   override def put(value: Array[Byte]): Long = {
     val id = shardWriters(currentWriterIndex).put(value)
     currentWriterIndex += 1

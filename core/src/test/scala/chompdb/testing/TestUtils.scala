@@ -11,7 +11,7 @@ object TestUtils {
 
   def createEmptyShard(versionedStore: VersionedStore, version: Long) {
     val filename = lastShardNum(versionedStore, version) match {
-      case None => 0.toString 
+      case None => 0.toString
       case Some(s) => (s + 1).toString
     }
 

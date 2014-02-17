@@ -27,9 +27,9 @@ object Chomp {
         .filter(_.database == database)
         .map { dbvs => (dbvs.version, dbvs.shard) }
 
-    override def mapReduce(catalog: String, database: String, version: Long, 
+    override def mapReduce(catalog: String, database: String, version: Long,
         ids: Seq[Long], mapReduce: String): Array[Byte] = {
-      
+
       val mr = chomp.deserializeMapReduce(mapReduce).asInstanceOf[MapReduce[ByteBuffer, Any]]
 
       val blobDatabase = chomp.databases
@@ -41,7 +41,7 @@ object Chomp {
         throw new ShardsNotFoundException("Shards for database $blobDatabase.name$ version $version$ not found.")
       )
 
-      val result = parSeq(ids) map { id => 
+      val result = parSeq(ids) map { id =>
         val shard = DatabaseVersionShard(catalog, database, version, (id % numShards).toInt)
 
         val reader = new FileStore.Reader {
@@ -93,7 +93,7 @@ abstract class Chomp extends SlapChop {
 
   @transient var servingVersions = Map.empty[Database, Option[Long]]
   @transient var numShardsPerVersion = Map.empty[(Database, Long), Int]
-  
+
   @transient var nodesAlive = Map.empty[Node, Boolean]
   @transient var nodesContent = Map.empty[Node, Set[DatabaseVersionShard]]
 
@@ -137,7 +137,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
       // TODO: This "fails" silently if the number of max retries is reached.
       deleteIncompleteShards(localDir)
 
-      copyShards(remoteDir, localDir, 0) foreach { numRetries => 
+      copyShards(remoteDir, localDir, 0) foreach { numRetries =>
         if (numRetries < maxDownloadRetries) {
           deleteIncompleteShards(localDir)
           copyShards(remoteDir, localDir, numRetries)
@@ -157,13 +157,13 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         }
     }
 
-    def copyShards(remoteVersionDir: FileSystem#Dir, localVersionDir: FileSystem#Dir, 
+    def copyShards(remoteVersionDir: FileSystem#Dir, localVersionDir: FileSystem#Dir,
         numRetries: Int): Option[Int] = {
       val remoteBasenamesToDownload = remoteVersionDir
         .listFiles
         .map { _.basename }
-        .filter { basename => (basename forall Character.isDigit) && 
-          (hashRing.getNodesForShard(basename.toInt) contains localNode) 
+        .filter { basename => (basename forall Character.isDigit) &&
+          (hashRing.getNodesForShard(basename.toInt) contains localNode)
         }
         .toSet
 
@@ -171,7 +171,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         copyShardFiles(basename, remoteVersionDir, localVersionDir)
       }
 
-      def copyShardFiles(basename: String, remoteVersionDir: FileSystem#Dir, 
+      def copyShardFiles(basename: String, remoteVersionDir: FileSystem#Dir,
           localVersionDir: FileSystem#Dir) {
         val blobFile = remoteVersionDir / (basename + ".blob")
         copy(blobFile, localVersionDir / blobFile.filename)
@@ -202,7 +202,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
     }
 
     def copy(from: FileSystem#File, to: FileSystem#File) {
-      from.readAsReader { reader => 
+      from.readAsReader { reader =>
         to.write(reader, from.size)
       }
     }
@@ -235,35 +235,35 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
     )
 
     val keysToNodes = partitionKeys(keys, blobDatabase, version, numShards)
-    
+
     // unfortunately, scala's parallel collections don't catch Errors, so let's do
-    // ourselves a favor and wrap them so they bubble back up to the client 
+    // ourselves a favor and wrap them so they bubble back up to the client
     def wrapErrors[T](f: => T) = {
       try f
-      catch { case e: Error => 
+      catch { case e: Error =>
         throw new RuntimeException(e)
       }
     }
-    
+
     parMap(keysToNodes) map { case (node, ids) =>
       wrapErrors{
         val serializedResult = nodeProtocol(node).mapReduce(catalog, database, version, ids, serializeMapReduce(mapReduce))
         deserializeMapReduceResult[T](serializedResult)
       }
-    } reduce { (t1, t2) => 
+    } reduce { (t1, t2) =>
       wrapErrors {
         mapReduce.reduce(t1, t2)
       }
     }
   }
 
-  def partitionKeys(keys: Seq[Long], blobDatabase: Database, version: Long, 
+  def partitionKeys(keys: Seq[Long], blobDatabase: Database, version: Long,
       numShards: Int): Map[Node, Seq[Long]] = keys
-    .map { key => 
+    .map { key =>
       val shard = DatabaseVersionShard(
-        blobDatabase.catalog.name, 
-        blobDatabase.name, 
-        version, 
+        blobDatabase.catalog.name,
+        blobDatabase.name,
+        version,
         (key % numShards).toInt
       )
 
@@ -285,7 +285,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
   def getNewVersionNumber(database: Database): Option[Long] = database
     .versionedStore
     .mostRecentVersion
-    .flatMap { latestRemoteVersion => 
+    .flatMap { latestRemoteVersion =>
       localDB(database).versionedStore.mostRecentVersion match {
         case Some(latestLocalVersion) =>
           if (latestRemoteVersion > latestLocalVersion) Some(latestRemoteVersion)
@@ -298,11 +298,11 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
     new Catalog(database.catalog.name, rootDir),
     database.name
   )
-  
+
   def initializeAvailableShards() {
     availableShards = databases
-      .map { db => localDB(db).versionedStore.versions 
-        .map { v => localDB(db).shardsOfVersion(v) } 
+      .map { db => localDB(db).versionedStore.versions
+        .map { v => localDB(db).shardsOfVersion(v) }
       }
       .toSet
       .flatten
@@ -311,7 +311,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
 
   def purgeInconsistentShards() {
     def isInconsistentShard(db: Database, v: Long, f: FileSystem#File): Boolean = {
-      (f.extension == "blob" || f.extension == "index") && 
+      (f.extension == "blob" || f.extension == "index") &&
         !(db.versionedStore.versionPath(v) / (f.basename + ".shard")).exists
     }
 
@@ -385,7 +385,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
   }
 
   def updateDatabase(database: Database) {
-    getNewVersionNumber(database) foreach { version => 
+    getNewVersionNumber(database) foreach { version =>
       if (!localDB(database).versionedStore.versionExists(version))
         downloadDatabaseVersion(database, version)
     }
@@ -407,7 +407,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
       .map { n => n -> databases
         .map { db => nodeProtocol(n)
           .availableShards(db.catalog.name, db.name)
-          .map { vs => DatabaseVersionShard(db.catalog.name, db.name, vs._1, vs._2) } 
+          .map { vs => DatabaseVersionShard(db.catalog.name, db.name, vs._1, vs._2) }
         }
         .flatten
         .toSet
@@ -425,7 +425,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
       .toList
       .flatten
       .filter { s => s.version == latestLocalVersions.getOrElse((s.catalog, s.database), -100) }
-    
+
     val shardsInNetworkByDBV = latestShardsInNetwork
       .groupBy { s => (s.catalog, s.database, s.version) }
       .map { case ((c, db, version), shardList) =>  ((c, db, version), shardList groupBy { _.shard }) }
@@ -437,7 +437,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         .map { s => s.size }
         .filter { _ < replicationBeforeVersionUpgrade }
       }
-    
+
     dbvToShardCounts foreach { case ((c, db, version), shardCounts) =>
       if (shardCounts.size == 0) {
         val servedDb = databases find { d => d.catalog.name == c && d.name == db }

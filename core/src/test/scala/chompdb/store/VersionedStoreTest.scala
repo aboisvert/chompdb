@@ -21,7 +21,7 @@ class VersionedStoreTest extends WordSpec with ShouldMatchers with OneInstancePe
 
   val tmpRoot = LocalFileSystem.tempRoot(testName) /+ "local"
   tmpRoot.mkdir()
-  
+
   "VersionedStore" should {
 
     val vs = new VersionedStore {

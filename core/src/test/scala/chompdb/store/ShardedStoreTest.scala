@@ -50,9 +50,9 @@ class ShardedStoreTest extends WordSpec with ShouldMatchers {
       }
       writer.close()
     }
-    
+
     "return resulting shard files" in newShardedWriter { writer =>
-      writer.shardFiles should be === (writer.shardWriters) 
+      writer.shardFiles should be === (writer.shardWriters)
     }
   }
 }
