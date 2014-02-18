@@ -87,7 +87,7 @@ abstract class Chomp extends SlapChop {
   val servingVersionsFreq: Duration
   val rootDir: FileSystem#Dir
 
-  lazy val hashRing = new HashRing(Chomp.this)
+  lazy val hashRing = new HashRing(replicationFactor)
 
   @transient var availableShards = Set.empty[DatabaseVersionShard]
 

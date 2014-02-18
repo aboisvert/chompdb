@@ -6,7 +6,7 @@ import java.util.TreeMap
 case class InvalidReplicationFactorException(smth: String) extends Exception
 case class NodeNotFoundException(smth: String) extends Exception
 
-class HashRing(chomp: Chomp) {
+class HashRing(replicationFactor: Int) {
   val nodeMap = new TreeMap[Int, Node]
 
   def addNode(node: Node) {
