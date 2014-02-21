@@ -63,12 +63,12 @@ class ChompTest extends WordSpec with ShouldMatchers {
     override val executor = mock(classOf[ScheduledExecutorService])
     override val databaseUpdateFreq = 1.minute
     override val nodesAliveFreq = 1.minute
-    override val nodesContentFreq = 1.minute
-    override val servingVersionsFreq = 1.minute
+    override val nodesContentFreq = 1.minute 
+    override val servingVersionsFreq = 1.minute   
     override val rootDir = tmpLocalRoot
 
     override def serializeMapReduce[T, U](mapReduce: MapReduce[T, U]) = "identity"
-
+    
     override def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _] = mapReduce match {
       case "identity" => new MapReduce[ByteBuffer, Seq[ByteBuffer]] {
         def map(t: ByteBuffer) = Seq(t)
@@ -123,7 +123,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
     val deserializedResult = chomp.deserializeMapReduceResult[Seq[Int]](serializedResult)
 
     deserializedResult should be === result
-  }
+  } 
 
     "given a database, reference a local version of that database" in {
       val database1Local = chomp.localDB(database1)
@@ -162,7 +162,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
 
       chomp.hashRing.nodeMap should be === tm
       chomp.hashRing.initialize(chomp.nodes.keys.toSet)
-
+      
       tm.put(Hashing.hash("Node1"), Node("Node1"))
       tm.put(Hashing.hash("Node2"), Node("Node2"))
 
@@ -206,7 +206,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
 
       chomp.downloadDatabaseVersion(database1, 2L)
 
-      database1Local.versionedStore.versionExists(2L) should be === true
+      database1Local.versionedStore.versionExists(2L) should be === true      
 
       val basenames = database1
         .versionedStore
@@ -216,7 +216,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
         .map { f => f.basename }
         .toSet
 
-      basenames foreach { basename =>
+      basenames foreach { basename => 
         if (chomp.hashRing.getNodesForShard(basename.toInt) contains chomp.localNode) {
           (database1Local.versionedStore.versionPath(2L) / (basename + ".blob")).exists should be === true
           (database1Local.versionedStore.versionPath(2L) / (basename + ".index")).exists should be === true
@@ -235,7 +235,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
       chomp.servingVersions should be === Map(database1 -> Some(1L))
       chomp.serveVersion(database1, Some(2L))
       chomp.servingVersions.getOrElse(database1, None) should be === Some(2L)
-    }
+    }    
 
     "determine the latest database version to download, if any" in {
       database1.versionedStore.createVersion(3L)
@@ -244,11 +244,11 @@ class ChompTest extends WordSpec with ShouldMatchers {
       createEmptyShard(database1.versionedStore, 3L)
       database1.versionedStore.succeedVersion(3L, 3)
 
-      chomp.getNewVersionNumber(database1) should be === Some(3L)
+      chomp.getNewerVersionNumber(database1) should be === Some(3L)
     }
 
     "update a database to the latest version" in {
-      val database1Local = chomp.localDB(database1)
+      val database1Local = chomp.localDB(database1)  
 
       chomp.servingVersions.getOrElse(database1, None) should be === Some(2L)
       database1Local.versionedStore.versionExists(3L) should be === false
@@ -265,7 +265,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
         .map { f => f.basename }
         .toSet
 
-      basenames foreach { basename =>
+      basenames foreach { basename => 
         if (chomp.hashRing.getNodesForShard(basename.toInt) contains chomp.localNode) {
           (database1Local.versionedStore.versionPath(3L) / (basename + ".blob")).exists should be === true
           (database1Local.versionedStore.versionPath(3L) / (basename + ".index")).exists should be === true
