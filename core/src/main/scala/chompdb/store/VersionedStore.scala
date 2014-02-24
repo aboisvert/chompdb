@@ -28,7 +28,7 @@ trait VersionedStore {
     .listFiles
     .filter(_.extension == "shard")
     .map { _.basename.toInt }
-    .toSet
+    .toSet 
 
   def createVersion(version: Long = System.currentTimeMillis): FileSystem#Dir = {
     if (versions contains version) throw new RuntimeException("Version already exists")
@@ -97,6 +97,18 @@ trait VersionedStore {
     for (r <- rejects) {
       deleteVersion(r)
     }
+  }
+
+  def purgeInconsistentShards() {
+    def isInconsistentShard(v: Long, f: FileSystem#File): Boolean = {
+      (f.extension == "blob" || f.extension == "index") &&
+        !(versionPath(v) / (f.basename + ".shard")).exists
+    }
+
+    for {
+      v <- versions
+      f <- versionPath(v).listFiles if isInconsistentShard(v, f)
+    } f.delete()
   }
 
   /* Sorted from most recent to oldest */
