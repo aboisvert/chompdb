@@ -13,7 +13,7 @@ abstract class HashRing[KEY, NODE: ClassTag](
 
   assert (replicationFactor >= 1)
   assert (nodes.size >= 1)
-  assert (nodes.size > replicationFactor)
+  assert (nodes.size >= replicationFactor)
 
   private val (sortedReplicators: Array[NODE], sortedHashes: Array[Int]) = {
     val entriesSortedByHash = nodes.toSeq map { e => (e, hashNode(e)) } sortBy (_._2)

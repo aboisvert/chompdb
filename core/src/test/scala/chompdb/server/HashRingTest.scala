@@ -1,38 +1,46 @@
 package chompdb.server
 
-import chompdb._
-import chompdb.store._
-import chompdb.testing._
-import f1lesystem.{ FileSystem, LocalFileSystem }
-import java.io.{ ByteArrayInputStream, ByteArrayOutputStream }
-import java.io.IOException
-import java.io.{ ObjectInputStream, ObjectOutputStream }
-import java.nio.ByteBuffer
-import java.util.concurrent.{ ScheduledExecutorService, TimeUnit }
-import java.util.TreeMap
 import scala.collection._
-import scala.collection.mutable.SynchronizedSet
-import scala.concurrent.duration._
-import scala.reflect.runtime.universe._
-
-import org.mockito.Mockito.{ mock, when }
-import org.scalatest.WordSpec
-import org.scalatest.matchers.ShouldMatchers
+import org.scalatest._
 
 @org.junit.runner.RunWith(classOf[org.scalatest.junit.JUnitRunner])
 class HashRingTest extends WordSpec with ShouldMatchers {
   val Seq(node1, node2, node3) = for (i <- 1 to 3) yield Node(i.toString)
   val nodes = Set(node1, node2, node3)
+
   "HashRing" should {
-    "calculate replicators" in {
+
+    "calculate replicators with replicationFactor = 1" in {
+      val h = new HashRing[Int, Node](replicationFactor = 1, nodes) {
+        override def hashNode(n: Node) = n.id.toInt
+        override def hashKey(k: Int) = k
+      }
+      h.replicators(1).toSeq should === (Seq(node1))
+      h.replicators(2).toSeq should === (Seq(node2))
+      h.replicators(3).toSeq should === (Seq(node3))
+      h.replicators(4).toSeq should === (Seq(node1)) // loop around
+    }
+
+    "calculate replicators with replicationFactor = 2" in {
       val h = new HashRing[Int, Node](replicationFactor = 2, nodes) {
         override def hashNode(n: Node) = n.id.toInt
         override def hashKey(k: Int) = k
       }
-      h.replicators(1).toSet should be === Set(node1, node2)
-      h.replicators(2).toSet should be === Set(node2, node3)
-      h.replicators(3).toSet should be === Set(node3, node1)
-      h.replicators(4).toSet should be === Set(node1, node2)
+      h.replicators(1).toSeq should === (Seq(node1, node2))
+      h.replicators(2).toSeq should === (Seq(node2, node3))
+      h.replicators(3).toSeq should === (Seq(node3, node1)) // loop around
+      h.replicators(4).toSeq should === (Seq(node1, node2))
+    }
+
+    "calculate replicators with replicationFactor = 3" in {
+      val h = new HashRing[Int, Node](replicationFactor = 3, nodes) {
+        override def hashNode(n: Node) = n.id.toInt
+        override def hashKey(k: Int) = k
+      }
+      h.replicators(1).toSeq should === (Seq(node1, node2, node3))
+      h.replicators(2).toSeq should === (Seq(node2, node3, node1)) // loop around
+      h.replicators(3).toSeq should === (Seq(node3, node1, node2))
+      h.replicators(4).toSeq should === (Seq(node1, node2, node3))
     }
   }
 }
