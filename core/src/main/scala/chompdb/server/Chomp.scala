@@ -13,6 +13,7 @@ import scala.concurrent.ExecutionContext
 import scala.util.control.Breaks._
 import scala.concurrent.duration._
 import scala.reflect.runtime.universe._
+import scala.util.hashing.MurmurHash3
 
 case class DatabaseNotFoundException(smth: String) extends Exception
 case class DatabaseNotServedException(smth: String) extends Exception
@@ -87,7 +88,10 @@ abstract class Chomp extends SlapChop {
   val servingVersionsFreq: Duration
   val rootDir: FileSystem#Dir
 
-  lazy val hashRing = new HashRing(replicationFactor)
+  lazy val hashRing = new HashRing[/* ShardId */ Int, Node]( replicationFactor, nodes.keySet) {
+    override def hashNode(n: Node) = MurmurHash3.stringHash(n.id)
+    override def hashKey(shardId: Int) = shardId.##
+  }
 
   @transient var availableShards = Set.empty[DatabaseVersionShard]
 
@@ -108,8 +112,6 @@ abstract class Chomp extends SlapChop {
   def deserializeMapReduceResult[T: TypeTag](result: Array[Byte]): T
 
   def run() {
-    hashRing.initialize(nodes.keys.toSet)
-
     for (database <- databases) {
       scheduleDatabaseUpdate(databaseUpdateFreq, database)
     }
@@ -163,7 +165,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         .listFiles
         .map { _.basename }
         .filter { basename => (basename forall Character.isDigit) &&
-          (hashRing.getNodesForShard(basename.toInt) contains localNode)
+          (hashRing.replicators(basename.toInt) contains localNode)
         }
         .toSet
 
@@ -272,12 +274,12 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         .keys
         .toSet
 
-      val nodesAssignedShard = hashRing.getNodesForShard(shard.shard)
+      val nodesAssignedShard = hashRing.replicators(shard.shard)
 
       val nodesAvailableWithShard = nodesAssignedShard
         .filter { n => (nodesServingShard contains n) && nodesAlive.getOrElse(n, false) }
 
-      (nodesAvailableWithShard.head, key)
+      (nodesAvailableWithShard.next, key)
     }
     .groupBy(_._1)
     .map { case (node, seq) => (node, seq map { _._2 }) }

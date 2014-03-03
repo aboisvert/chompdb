@@ -6,7 +6,6 @@ import f1lesystem._
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Executors
 import scala.concurrent.duration._
-import chompdb.server.SlapChop
 
 object SmokeTest extends App {
   import Utils._

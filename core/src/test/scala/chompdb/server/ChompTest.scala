@@ -158,15 +158,8 @@ class ChompTest extends WordSpec with ShouldMatchers {
     }
 
     "initialize the internal hash ring" in {
-      val tm = new TreeMap[Int, Node]
-
-      chomp.hashRing.nodeMap should be === tm
-      chomp.hashRing.initialize(chomp.nodes.keys.toSet)
-
-      tm.put(Hashing.hash("Node1"), Node("Node1"))
-      tm.put(Hashing.hash("Node2"), Node("Node2"))
-
-      chomp.hashRing.nodeMap should be === tm
+      chomp.hashRing.nodes should be === chomp.nodes.keySet
+      chomp.hashRing.replicationFactor should be === chomp.replicationFactor
     }
 
     "purge inconsistent shards within the Chomp's filesystem" in {
@@ -217,7 +210,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
         .toSet
 
       basenames foreach { basename =>
-        if (chomp.hashRing.getNodesForShard(basename.toInt) contains chomp.localNode) {
+        if (chomp.hashRing.replicators(basename.toInt) contains chomp.localNode) {
           (database1Local.versionedStore.versionPath(2L) / (basename + ".blob")).exists should be === true
           (database1Local.versionedStore.versionPath(2L) / (basename + ".index")).exists should be === true
           database1Local.versionedStore.shardMarker(2L, basename.toInt).exists should be === true
@@ -266,7 +259,7 @@ class ChompTest extends WordSpec with ShouldMatchers {
         .toSet
 
       basenames foreach { basename =>
-        if (chomp.hashRing.getNodesForShard(basename.toInt) contains chomp.localNode) {
+        if (chomp.hashRing.replicators(basename.toInt) contains chomp.localNode) {
           (database1Local.versionedStore.versionPath(3L) / (basename + ".blob")).exists should be === true
           (database1Local.versionedStore.versionPath(3L) / (basename + ".index")).exists should be === true
           database1Local.versionedStore.shardMarker(3L, basename.toInt).exists should be === true
