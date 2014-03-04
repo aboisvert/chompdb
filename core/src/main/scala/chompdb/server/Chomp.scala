@@ -19,29 +19,14 @@ case class DatabaseNotServedException(smth: String) extends Exception
 case class ShardsNotFoundException(smth: String) extends Exception
 case class VersionNotFoundException(smth: String) extends Exception
 
-trait SerializableMapReduce[T, U] extends MapReduce[T, U] {
-  /** Serializer-deserializer for this instance */
-  def serde: SerDe[MapReduce[T, U]]
-
-  /** Serializer-deserializer for type parameter T */
-  def serde_T: SerDe[T] 
-
-  /** Serializer-deserializer for type parameter U */
-  def serde_U: SerDe[U] 
-}
-
 object Chomp {
   class LocalNodeProtocol(node: Node, chomp: Chomp) extends NodeProtocol {
     override def availableShards(catalog: String, database: String): Set[VersionShard] =
-      chomp
-        .availableShards
+      chomp.availableShards
         .filter(_.database == database)
         .map { dbvs => (dbvs.version, dbvs.shard) }
 
-    override def mapReduce(catalog: String, database: String, version: Long,
-        ids: Seq[Long], mapReduce: String): Array[Byte] = {
-
-      val mr = chomp.deserializeMapReduce(mapReduce).asInstanceOf[MapReduce[ByteBuffer, Any]]
+    override def mapReduce[T](catalog: String, database: String, version: Long, ids: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
 
       val blobDatabase = chomp.databases
         .find { db => db.catalog.name == catalog && db.name == database }
@@ -65,12 +50,11 @@ object Chomp {
         val blob = reader.get(id)
         reader.close()
 
-        val bbBlob = ByteBuffer.wrap(blob)
-        mr.map(bbBlob)
+        mapReduce.map(ByteBuffer.wrap(blob))
 
-      } reduce { mr.reduce(_, _) }
+      } reduce { mapReduce.reduce(_, _) }
 
-      chomp.serializeMapReduceResult(result)
+      result
     }
 
     private def parSeq[T](s: Seq[T]) = {
@@ -110,14 +94,6 @@ abstract class Chomp {
 
   def nodeProtocol: Map[Node, NodeProtocol]
 
-  def serializeMapReduce[T, U](mapReduce: MapReduce[T, U]): String
-
-  def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _]
-
-  def serializeMapReduceResult(result: Any): Array[Byte]
-
-  def deserializeMapReduceResult[T: TypeTag](result: Array[Byte]): T
-
   def run() {
     hashRing.initialize(nodes.keys.toSet)
 
@@ -134,7 +110,7 @@ abstract class Chomp {
     scheduleServingVersions(servingVersionsFreq)
   }
 
-def downloadDatabaseVersion(database: Database, version: Long) = {
+  def downloadDatabaseVersion(database: Database, version: Long) = {
     val remoteDir = database.versionedStore.versionPath(version)
     val remoteVersionMarker = database.versionedStore.versionMarker(version)
 
@@ -220,19 +196,25 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
   }
 
   private def parMap[T, U](m: Map[T, U]) = {
-    val pc = m.par
     val executionContext = ExecutionContext.fromExecutor(executor)
+    val pc = m.par
     pc.tasksupport = new ExecutionContextTaskSupport(executionContext)
     pc
   }
 
-  def mapReduce[T](catalog: String, database: String, keys: Seq[Long], mapReduce: SerializableMapReduce[ByteBuffer, T]): T = {
-    val blobDatabase = databases
-      .find { db => db.catalog.name == catalog && db.name == database }
-      .getOrElse { throw new DatabaseNotFoundException("Database $database$ not found.") }
+  private def parSeq[T](s: Seq[T]) = {
+    val executionContext = ExecutionContext.fromExecutor(executor)
+    val pc = s.par
+    pc.tasksupport = new ExecutionContextTaskSupport(executionContext)
+    pc
+  }
 
-    val servedVersion = servingVersions getOrElse (
-      blobDatabase,
+  def mapReduce[T](catalog: String, database: String, keys: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
+    val blobDatabase = databases.find { db => db.catalog.name == catalog && db.name == database } getOrElse {
+      throw new DatabaseNotFoundException("Database $database$ not found.")
+    }
+
+    val servedVersion = servingVersions getOrElse (blobDatabase,
       throw new DatabaseNotServedException("Database $blobDatabase.name$ not currently being served.")
     )
 
@@ -240,8 +222,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
       throw new VersionNotFoundException("Shards for database $blobDatabase.name$ version $version$ not found.")
     )
 
-    val numShards = numShardsPerVersion getOrElse (
-      (blobDatabase, version),
+    val numShards = numShardsPerVersion getOrElse ((blobDatabase, version),
       throw new ShardsNotFoundException("Shards for database $blobDatabase.name$ version $version$ not found.")
     )
 
@@ -257,31 +238,37 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
     }
 
     parMap(keysToNodes) map { case (node, ids) =>
-      wrapErrors {
-        val serializedResult = nodeProtocol(node).mapReduce(catalog, database, version, ids, serializeMapReduce(mapReduce))
-        mapReduce.serde_U.deserialize(serializedResult)
-      }
+      wrapErrors { nodeProtocol(node).mapReduce(catalog, database, version, ids, mapReduce) }
     } reduce { (t1, t2) =>
-      wrapErrors {
-        mapReduce.reduce(t1, t2)
-      }
+      wrapErrors { mapReduce.reduce(t1, t2) }
     }
   }
 
-  def partitionKeys(keys: Seq[Long], blobDatabase: Database, version: Long,
-      numShards: Int): Map[Node, Seq[Long]] = keys
-    .map { key =>
-      val shard = DatabaseVersionShard(
-        blobDatabase.catalog.name,
-        blobDatabase.name,
-        version,
-        (key % numShards).toInt
-      )
+  def mapReduce[T](catalog: String, database: String, version: Long, ids: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
+    val blobDatabase = databases.find { db => db.catalog.name == catalog && db.name == database } getOrElse {
+      throw new DatabaseNotFoundException("Database $database$ not found.")
+    }
 
-      val nodesServingShard = nodesContent
-        .filter { _._2 contains shard }
-        .keys
-        .toSet
+    val numShards = numShardsPerVersion getOrElse ((blobDatabase, version),
+      throw new ShardsNotFoundException("Shards for database $blobDatabase.name$ version $version$ not found.")
+    )
+
+    val result = parSeq(ids) map { id =>
+      val shard = DatabaseVersionShard(catalog, database, version, (id % numShards).toInt)
+      val file: FileSystem#File = localDB(blobDatabase).versionedStore.shardMarker(shard.version, shard.shard)
+      val reader = new FileStore.Reader { val baseFile = file }
+      val blob = try reader.get(id) finally reader.close()
+      mapReduce.map(ByteBuffer.wrap(blob))
+    } reduce { mapReduce.reduce(_, _) }
+
+    result
+  }
+
+  def partitionKeys(keys: Seq[Long], blobDatabase: Database, version: Long, numShards: Int): Map[Node, Seq[Long]] = {
+    val nodeToKey = keys.map { key =>
+      val shard = DatabaseVersionShard(blobDatabase.catalog.name, blobDatabase.name, version, (key % numShards).toInt)
+
+      val nodesServingShard = nodesContent.filter { _._2 contains shard }.keys.toSet
 
       val nodesAssignedShard = hashRing.getNodesForShard(shard.shard)
 
@@ -290,13 +277,14 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
 
       (nodesAvailableWithShard.head, key)
     }
-    .groupBy(_._1)
-    .map { case (node, seq) => (node, seq map { _._2 }) }
 
-  def getNewVersionNumber(database: Database): Option[Long] = database
-    .versionedStore
-    .mostRecentVersion
-    .flatMap { latestRemoteVersion =>
+    nodeToKey
+     .groupBy   { case (node, key) => node }
+     .mapValues { _ map { case (node, key) => key } }
+  }
+
+  def getNewVersionNumber(database: Database): Option[Long] = {
+    database.versionedStore.mostRecentVersion flatMap { latestRemoteVersion =>
       localDB(database).versionedStore.mostRecentVersion match {
         case Some(latestLocalVersion) =>
           if (latestRemoteVersion > latestLocalVersion) Some(latestRemoteVersion)
@@ -304,26 +292,17 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         case None => Some(latestRemoteVersion)
       }
     }
+  }
 
-  def localDB(database: Database): Database = new Database(
-    new Catalog(database.catalog.name, rootDir),
-    database.name
-  )
+  private[server] def localDB(database: Database) = new Database(new Catalog(database.catalog.name, rootDir), database.name)
 
   def initializeAvailableShards() {
-    availableShards = databases
-      .map { db => localDB(db).versionedStore.versions
-        .map { v => localDB(db).shardsOfVersion(v) }
-      }
-      .toSet
-      .flatten
-      .flatten
+    availableShards = databases flatMap { db => localDB(db).versionedStore.versions flatMap { v => localDB(db).shardsOfVersion(v) } } toSet
   }
 
   def purgeInconsistentShards() {
     def isInconsistentShard(db: Database, v: Long, f: FileSystem#File): Boolean = {
-      (f.extension == "blob" || f.extension == "index") &&
-        !(db.versionedStore.versionPath(v) / (f.basename + ".shard")).exists
+      (f.extension == "blob" || f.extension == "index") && !(db.versionedStore.versionPath(v) / (f.basename + ".shard")).exists
     }
 
     databases

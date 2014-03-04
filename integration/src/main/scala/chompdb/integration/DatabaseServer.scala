@@ -31,21 +31,4 @@ trait DatabaseServer extends Chomp {
   override val nodesAliveFreq      = 1.minute
   override val nodesContentFreq    = 1.minute
   override val servingVersionsFreq = 1.minute
-
-  override def serializeMapReduce[T, U](mapReduce: MapReduce[T, U]): String = "mapReduce"
-
-  override def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _] = {
-    mapReduce match {
-      case "mapReduce" => DatabaseClient.CollectVersions
-    }
-  }
-
-  override def serializeMapReduceResult(result: Any): Array[Byte] = {
-    serialize(result)
-  }
-
-  override def deserializeMapReduceResult[T: TypeTag](result: Array[Byte]): T = {
-    deserialize(result)
-  }
-
 }
