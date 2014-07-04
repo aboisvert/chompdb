@@ -102,6 +102,7 @@ abstract class Chomp {
     }
 
     purgeInconsistentShards()
+
     initializeAvailableShards()
     initializeServingVersions()
     initializeNumShardsPerVersion()
@@ -305,12 +306,11 @@ abstract class Chomp {
       (f.extension == "blob" || f.extension == "index") && !(db.versionedStore.versionPath(v) / (f.basename + ".shard")).exists
     }
 
-    databases
-      .map { db => localDB(db).versionedStore.versions
-        .map { v => localDB(db).versionedStore.versionPath(v)
-          .listFiles
-          .filter { f => isInconsistentShard(localDB(db), v, f) }
-          .foreach { f => f.delete() }
+    databases map { db =>
+      localDB(db).versionedStore.versions map { v =>
+        localDB(db).versionedStore.versionPath(v).listFiles
+          .filter { isInconsistentShard(localDB(db), v, _) }
+          .foreach { _.delete() }
         }
       }
   }
@@ -331,43 +331,31 @@ abstract class Chomp {
   }
 
   def scheduleDatabaseUpdate(duration: Duration, database: Database) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateDatabase(database)
-      }
+    val task = new Runnable() {
+      override def run() { updateDatabase(database) }
     }
-
-    executor.scheduleAtFixedRate(task, 0L, duration.toMillis, MILLISECONDS)
+    executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleNodesAlive(duration: Duration) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateNodesAlive()
-      }
+    val task = new Runnable() {
+      def run() { updateNodesAlive() }
     }
-
     executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleNodesContent(duration: Duration) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateNodesContent()
-      }
+    val task = new Runnable() {
+      def run() { updateNodesContent() }
     }
-
-    executor.scheduleAtFixedRate(task, 0L, duration.toMillis, MILLISECONDS)
+    executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleServingVersions(duration: Duration) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateServingVersions()
-      }
+    val task = new Runnable() {
+      def run() { updateServingVersions() }
     }
-
-    executor.scheduleAtFixedRate(task, 0L, duration.toMillis, MILLISECONDS)
+    executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def serveVersion(database: Database, version: Option[Long]) = {
@@ -380,15 +368,11 @@ abstract class Chomp {
         downloadDatabaseVersion(database, version)
     }
 
-    localDB(database)
-      .versionedStore
-      .cleanup(maxVersions)
+    localDB(database).versionedStore .cleanup(maxVersions)
   }
 
   def updateNodesAlive() {
-    nodesAlive = nodes
-      .keys
-      .map( n => n -> nodeAlive.isAlive(n) )(breakOut)
+    nodesAlive = nodes.keys.map( n => n -> nodeAlive.isAlive(n) )(breakOut)
   }
 
   def updateNodesContent() {
