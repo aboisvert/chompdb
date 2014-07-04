@@ -4,8 +4,8 @@ VERSION_NUMBER = "0.0.1-SNAPSHOT"
 
 repositories.remote << "http://repo1.maven.org/maven2"
 
-F1LESYSTEM = "org.alexboisvert:f1lesystem-core:jar:0.0.2-SNAPSHOT"
-PIXII      = "pixii:pixii_2.10.0:jar:0.0.4-SNAPSHOT"
+F1LESYSTEM = "org.alexboisvert:f1lesystem-core:jar:0.0.2"
+PIXII      = "pixii:pixii_2.10.0:jar:0.0.4"
 AWS_SDK    = 'com.amazonaws:aws-java-sdk:jar:1.5.5'
 
 desc "An embeddable distributed BLOB storage library"
