@@ -34,7 +34,7 @@ class HashRing(replicationFactor: Int) {
           }
         }
 
-        assembleNodeSet(Set.empty[Node], chomp.replicationFactor, shardHashValue)
+        assembleNodeSet(Set.empty[Node], replicationFactor, shardHashValue)
       }
     }
   }

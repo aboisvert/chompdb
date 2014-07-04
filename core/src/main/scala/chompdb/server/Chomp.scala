@@ -22,15 +22,11 @@ case class VersionNotFoundException(smth: String) extends Exception
 object Chomp {
   class LocalNodeProtocol(node: Node, chomp: Chomp) extends NodeProtocol {
     override def availableShards(catalog: String, database: String): Set[VersionShard] =
-      chomp
-        .availableShards
+      chomp.availableShards
         .filter(_.database == database)
         .map { dbvs => (dbvs.version, dbvs.shard) }
 
-    override def mapReduce(catalog: String, database: String, version: Long,
-        ids: Seq[Long], mapReduce: String): Array[Byte] = {
-
-      val mr = chomp.deserializeMapReduce(mapReduce).asInstanceOf[MapReduce[ByteBuffer, Any]]
+    override def mapReduce[T](catalog: String, database: String, version: Long, ids: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
 
       val blobDatabase = chomp.databases
         .find { db => db.catalog.name == catalog && db.name == database }
@@ -54,12 +50,11 @@ object Chomp {
         val blob = reader.get(id)
         reader.close()
 
-        val bbBlob = ByteBuffer.wrap(blob)
-        mr.map(bbBlob)
+        mapReduce.map(ByteBuffer.wrap(blob))
 
-      } reduce { mr.reduce(_, _) }
+      } reduce { mapReduce.reduce(_, _) }
 
-      chomp.serializeMapReduceResult(result)
+      result
     }
 
     private def parSeq[T](s: Seq[T]) = {
@@ -71,7 +66,7 @@ object Chomp {
   }
 }
 
-abstract class Chomp extends SlapChop {
+abstract class Chomp {
   val databases: Seq[Database]
   val localNode: Node
   val nodes: Map[Node, Endpoint]
@@ -99,14 +94,6 @@ abstract class Chomp extends SlapChop {
 
   def nodeProtocol: Map[Node, NodeProtocol]
 
-  def serializeMapReduce[T, U](mapReduce: MapReduce[T, U]): String
-
-  def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _]
-
-  def serializeMapReduceResult(result: Any): Array[Byte]
-
-  def deserializeMapReduceResult[T: TypeTag](result: Array[Byte]): T
-
   def run() {
     hashRing.initialize(nodes.keys.toSet)
 
@@ -115,6 +102,7 @@ abstract class Chomp extends SlapChop {
     }
 
     purgeInconsistentShards()
+
     initializeAvailableShards()
     initializeServingVersions()
     initializeNumShardsPerVersion()
@@ -123,7 +111,7 @@ abstract class Chomp extends SlapChop {
     scheduleServingVersions(servingVersionsFreq)
   }
 
-def downloadDatabaseVersion(database: Database, version: Long) = {
+  def downloadDatabaseVersion(database: Database, version: Long) = {
     val remoteDir = database.versionedStore.versionPath(version)
     val remoteVersionMarker = database.versionedStore.versionMarker(version)
 
@@ -209,19 +197,25 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
   }
 
   private def parMap[T, U](m: Map[T, U]) = {
-    val pc = m.par
     val executionContext = ExecutionContext.fromExecutor(executor)
+    val pc = m.par
     pc.tasksupport = new ExecutionContextTaskSupport(executionContext)
     pc
   }
 
-  override def mapReduce[T: TypeTag](catalog: String, database: String, keys: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]) = {
-    val blobDatabase = databases
-      .find { db => db.catalog.name == catalog && db.name == database }
-      .getOrElse { throw new DatabaseNotFoundException("Database $database$ not found.") }
+  private def parSeq[T](s: Seq[T]) = {
+    val executionContext = ExecutionContext.fromExecutor(executor)
+    val pc = s.par
+    pc.tasksupport = new ExecutionContextTaskSupport(executionContext)
+    pc
+  }
 
-    val servedVersion = servingVersions getOrElse (
-      blobDatabase,
+  def mapReduce[T](catalog: String, database: String, keys: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
+    val blobDatabase = databases.find { db => db.catalog.name == catalog && db.name == database } getOrElse {
+      throw new DatabaseNotFoundException("Database $database$ not found.")
+    }
+
+    val servedVersion = servingVersions getOrElse (blobDatabase,
       throw new DatabaseNotServedException("Database $blobDatabase.name$ not currently being served.")
     )
 
@@ -229,8 +223,7 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
       throw new VersionNotFoundException("Shards for database $blobDatabase.name$ version $version$ not found.")
     )
 
-    val numShards = numShardsPerVersion getOrElse (
-      (blobDatabase, version),
+    val numShards = numShardsPerVersion getOrElse ((blobDatabase, version),
       throw new ShardsNotFoundException("Shards for database $blobDatabase.name$ version $version$ not found.")
     )
 
@@ -246,31 +239,37 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
     }
 
     parMap(keysToNodes) map { case (node, ids) =>
-      wrapErrors{
-        val serializedResult = nodeProtocol(node).mapReduce(catalog, database, version, ids, serializeMapReduce(mapReduce))
-        deserializeMapReduceResult[T](serializedResult)
-      }
+      wrapErrors { nodeProtocol(node).mapReduce(catalog, database, version, ids, mapReduce) }
     } reduce { (t1, t2) =>
-      wrapErrors {
-        mapReduce.reduce(t1, t2)
-      }
+      wrapErrors { mapReduce.reduce(t1, t2) }
     }
   }
 
-  def partitionKeys(keys: Seq[Long], blobDatabase: Database, version: Long,
-      numShards: Int): Map[Node, Seq[Long]] = keys
-    .map { key =>
-      val shard = DatabaseVersionShard(
-        blobDatabase.catalog.name,
-        blobDatabase.name,
-        version,
-        (key % numShards).toInt
-      )
+  def mapReduce[T](catalog: String, database: String, version: Long, ids: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
+    val blobDatabase = databases.find { db => db.catalog.name == catalog && db.name == database } getOrElse {
+      throw new DatabaseNotFoundException("Database $database$ not found.")
+    }
 
-      val nodesServingShard = nodesContent
-        .filter { _._2 contains shard }
-        .keys
-        .toSet
+    val numShards = numShardsPerVersion getOrElse ((blobDatabase, version),
+      throw new ShardsNotFoundException("Shards for database $blobDatabase.name$ version $version$ not found.")
+    )
+
+    val result = parSeq(ids) map { id =>
+      val shard = DatabaseVersionShard(catalog, database, version, (id % numShards).toInt)
+      val file: FileSystem#File = localDB(blobDatabase).versionedStore.shardMarker(shard.version, shard.shard)
+      val reader = new FileStore.Reader { val baseFile = file }
+      val blob = try reader.get(id) finally reader.close()
+      mapReduce.map(ByteBuffer.wrap(blob))
+    } reduce { mapReduce.reduce(_, _) }
+
+    result
+  }
+
+  def partitionKeys(keys: Seq[Long], blobDatabase: Database, version: Long, numShards: Int): Map[Node, Seq[Long]] = {
+    val nodeToKey = keys.map { key =>
+      val shard = DatabaseVersionShard(blobDatabase.catalog.name, blobDatabase.name, version, (key % numShards).toInt)
+
+      val nodesServingShard = nodesContent.filter { _._2 contains shard }.keys.toSet
 
       val nodesAssignedShard = hashRing.getNodesForShard(shard.shard)
 
@@ -279,13 +278,14 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
 
       (nodesAvailableWithShard.head, key)
     }
-    .groupBy(_._1)
-    .map { case (node, seq) => (node, seq map { _._2 }) }
 
-  def getNewVersionNumber(database: Database): Option[Long] = database
-    .versionedStore
-    .mostRecentVersion
-    .flatMap { latestRemoteVersion =>
+    nodeToKey
+     .groupBy   { case (node, key) => node }
+     .mapValues { _ map { case (node, key) => key } }
+  }
+
+  def getNewVersionNumber(database: Database): Option[Long] = {
+    database.versionedStore.mostRecentVersion flatMap { latestRemoteVersion =>
       localDB(database).versionedStore.mostRecentVersion match {
         case Some(latestLocalVersion) =>
           if (latestRemoteVersion > latestLocalVersion) Some(latestRemoteVersion)
@@ -293,34 +293,24 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         case None => Some(latestRemoteVersion)
       }
     }
+  }
 
-  def localDB(database: Database): Database = new Database(
-    new Catalog(database.catalog.name, rootDir),
-    database.name
-  )
+  private[server] def localDB(database: Database) = new Database(new Catalog(database.catalog.name, rootDir), database.name)
 
   def initializeAvailableShards() {
-    availableShards = databases
-      .map { db => localDB(db).versionedStore.versions
-        .map { v => localDB(db).shardsOfVersion(v) }
-      }
-      .toSet
-      .flatten
-      .flatten
+    availableShards = databases flatMap { db => localDB(db).versionedStore.versions flatMap { v => localDB(db).shardsOfVersion(v) } } toSet
   }
 
   def purgeInconsistentShards() {
     def isInconsistentShard(db: Database, v: Long, f: FileSystem#File): Boolean = {
-      (f.extension == "blob" || f.extension == "index") &&
-        !(db.versionedStore.versionPath(v) / (f.basename + ".shard")).exists
+      (f.extension == "blob" || f.extension == "index") && !(db.versionedStore.versionPath(v) / (f.basename + ".shard")).exists
     }
 
-    databases
-      .map { db => localDB(db).versionedStore.versions
-        .map { v => localDB(db).versionedStore.versionPath(v)
-          .listFiles
-          .filter { f => isInconsistentShard(localDB(db), v, f) }
-          .foreach { f => f.delete() }
+    databases map { db =>
+      localDB(db).versionedStore.versions map { v =>
+        localDB(db).versionedStore.versionPath(v).listFiles
+          .filter { isInconsistentShard(localDB(db), v, _) }
+          .foreach { _.delete() }
         }
       }
   }
@@ -341,43 +331,31 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
   }
 
   def scheduleDatabaseUpdate(duration: Duration, database: Database) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateDatabase(database)
-      }
+    val task = new Runnable() {
+      override def run() { updateDatabase(database) }
     }
-
-    executor.scheduleAtFixedRate(task, 0L, duration.toMillis, MILLISECONDS)
+    executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleNodesAlive(duration: Duration) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateNodesAlive()
-      }
+    val task = new Runnable() {
+      def run() { updateNodesAlive() }
     }
-
     executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleNodesContent(duration: Duration) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateNodesContent()
-      }
+    val task = new Runnable() {
+      def run() { updateNodesContent() }
     }
-
-    executor.scheduleAtFixedRate(task, 0L, duration.toMillis, MILLISECONDS)
+    executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleServingVersions(duration: Duration) = {
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateServingVersions()
-      }
+    val task = new Runnable() {
+      def run() { updateServingVersions() }
     }
-
-    executor.scheduleAtFixedRate(task, 0L, duration.toMillis, MILLISECONDS)
+    executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def serveVersion(database: Database, version: Option[Long]) = {
@@ -390,15 +368,11 @@ def downloadDatabaseVersion(database: Database, version: Long) = {
         downloadDatabaseVersion(database, version)
     }
 
-    localDB(database)
-      .versionedStore
-      .cleanup(maxVersions)
+    localDB(database).versionedStore .cleanup(maxVersions)
   }
 
   def updateNodesAlive() {
-    nodesAlive = nodes
-      .keys
-      .map( n => n -> nodeAlive.isAlive(n) )(breakOut)
+    nodesAlive = nodes.keys.map( n => n -> nodeAlive.isAlive(n) )(breakOut)
   }
 
   def updateNodesContent() {

@@ -42,52 +42,25 @@ class NodeProtocolTest extends WordSpec with ShouldMatchers {
     .map { case (node, chomp) => node -> new Chomp.LocalNodeProtocol(node, chomp) }
     .toMap
 
-  val chomps: Set[(Node, Chomp)] = allNodes
-    .map { node =>
-      node -> new Chomp {
-        override val databases = Seq(db1)
-        override val localNode = node
-        override val nodes = allNodes map { n => (n, Endpoint("Endpoint" + n.id takeRight 1)) } toMap
-        override val nodeAlive = mock(classOf[NodeAlive])
-        override val replicationFactor = 1
-        override val replicationBeforeVersionUpgrade = 1
-        override val maxVersions = 3
-        override val maxDownloadRetries = 3
-        override val executor = mock(classOf[ScheduledExecutorService])
-        override val databaseUpdateFreq = 1.minute
-        override val nodesAliveFreq = 1.minute
-        override val nodesContentFreq = 1.minute
-        override val servingVersionsFreq = 1.minute
-        override val rootDir = tmpLocalRoot
+  val chomps: Set[(Node, Chomp)] = allNodes map { node =>
+    node -> new Chomp {
+      override val databases = Seq(db1)
+      override val localNode = node
+      override val nodes = allNodes map { n => (n, Endpoint("Endpoint" + n.id takeRight 1)) } toMap
+      override val nodeAlive = mock(classOf[NodeAlive])
+      override val replicationFactor = 1
+      override val replicationBeforeVersionUpgrade = 1
+      override val maxVersions = 3
+      override val maxDownloadRetries = 3
+      override val executor = mock(classOf[ScheduledExecutorService])
+      override val databaseUpdateFreq = 1.minute
+      override val nodesAliveFreq = 1.minute
+      override val nodesContentFreq = 1.minute
+      override val servingVersionsFreq = 1.minute
+      override val rootDir = tmpLocalRoot
 
-        override def nodeProtocol = nodeProtocols
-
-        override def serializeMapReduce[T, U](mapReduce: MapReduce[T, U]) = "identity"
-
-        override def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _] = mapReduce match {
-          case "identity" => new MapReduce[ByteBuffer, Seq[ByteBuffer]] {
-            def map(t: ByteBuffer) = Seq(t)
-            def reduce(t1: Seq[ByteBuffer], t2: Seq[ByteBuffer]): Seq[ByteBuffer] = t1 ++ t2
-          }
-        }
-
-        @throws(classOf[IOException])
-        override def serializeMapReduceResult(result: Any): Array[Byte] = {
-          val b = new ByteArrayOutputStream()
-          val o = new ObjectOutputStream(b)
-          o.writeObject(result)
-          o.flush()
-          o.close()
-          b.toByteArray()
-        }
-
-        @throws(classOf[IOException])
-        override def deserializeMapReduceResult[T: TypeTag](result: Array[Byte]): T = {
-          val b = new ByteArrayInputStream(result)
-          val o = new ObjectInputStream(b)
-          o.readObject().asInstanceOf[T]
-        }
-      }
+      override def nodeProtocol = nodeProtocols
+    }
   }
 
   chomps foreach { nodeAndChomp => nodeAndChomp._2.initializeAvailableShards() }
