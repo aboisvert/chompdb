@@ -25,43 +25,29 @@ object Chomp {
   class LocalNodeProtocol(node: Node, chomp: Chomp) extends NodeProtocol {
     override def availableShards(catalog: String, database: String): Set[VersionShard] = {
       chomp.log.debug(s"Returning shards available for $catalog / $database on $node $chomp")
-      chomp
-        .availableShards
+      chomp.availableShards
         .filter { _.database == database }
         .map { dbvs => (dbvs.version, dbvs.shard) }
     }
 
-    override def mapReduce(catalog: String, database: String, version: Long, 
-        ids: Seq[Long], mapReduce: String): Array[Byte] = {
+    override def mapReduce[T](catalog: String, database: String, version: Long, ids: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
       chomp.log.debug(s"Beginning mapReduce $mapReduce over $catalog / $database / $version on $node $chomp")
-      val mr = chomp.deserializeMapReduce(mapReduce).asInstanceOf[MapReduce[ByteBuffer, Any]]
 
       val blobDatabase = chomp.databases
         .find { db => db.catalog.name == catalog && db.name == database }
         .getOrElse { 
-          chomp.log.error(
-            s"Database $database not found on $node $chomp",
-            throw new DatabaseNotFoundException("Database $database not found on $node $chomp") 
-          )
           throw new DatabaseNotFoundException("Database $database not found on $node $chomp")
         }
 
       chomp.log.debug(s"Database $blobDatabase.name located locally for mapReduce $mapReduce over $catalog / $database / $version on $node $chomp")
 
-      val numShards = chomp.numShardsPerVersion getOrElse (
-        (blobDatabase, version),
-        {
-          chomp.log.error(
-            s"Shards for database $blobDatabase.name version $version not found on $node $chomp",
-            throw new DatabaseNotFoundException("Shards for database $blobDatabase.name version $version not found.")
-          )
-          throw new ShardsNotFoundException("Shards for database $blobDatabase.name version $version not found.")
-        }
+      val numShards = chomp.numShardsPerVersion getOrElse ((blobDatabase, version),
+        throw new ShardsNotFoundException("Shards for database $blobDatabase.name version $version not found.")
       )
 
       chomp.log.debug(s"numShards retrieved from numShardsPerVersion for mapReduce $mapReduce over $catalog / $database / $version on $node $chomp")
 
-      val result = parSeq(ids) map { id => 
+      val result = chomp.parSeq(ids) map { id => 
         val shard = DatabaseVersionShard(catalog, database, version, (id % numShards).toInt)
 
         val reader = new FileStore.Reader {
@@ -74,27 +60,19 @@ object Chomp {
         val blob = reader.get(id)
         reader.close()
 
-        val bbBlob = ByteBuffer.wrap(blob)
-        mr.map(bbBlob)
+        mapReduce.map(ByteBuffer.wrap(blob))
 
-      } reduce { mr.reduce(_, _) }
+      } reduce { (x1, x2) =>
+        mapReduce.reduce(x1, x2) 
+      }
 
-      chomp.log.debug(s"Determined result for mapReduce $mapReduce over $catalog / $database / $version on $node $chomp")
-
-      chomp.log.info(s"Returning serialized result for mapReduce $mapReduce over $catalog / $database / $version")
-      chomp.serializeMapReduceResult(result)
-    }
-
-    private def parSeq[T](s: Seq[T]) = {
-      val pc = s.par
-      val executionContext = ExecutionContext.fromExecutor(chomp.executor)
-      pc.tasksupport = new ExecutionContextTaskSupport(executionContext)
-      pc
+      chomp.log.debug(s"MapReduce $catalog / $database / $version on $node: $result")
+      result
     }
   }
 }
 
-abstract class Chomp extends SlapChop {
+abstract class Chomp {
   // Logger for debugging and status messages
   val log: Logger
   // Databases on secondary filesystem
@@ -133,7 +111,7 @@ abstract class Chomp extends SlapChop {
   val rootDir: FileSystem#Dir
 
   // HashRing instance for consistent hashing
-  lazy val hashRing = new HashRing(Chomp.this)
+  lazy val hashRing = new HashRing(replicationFactor)
 
   // Set of shards available locally on current Node
   @transient var availableShards = Set.empty[DatabaseVersionShard]
@@ -151,21 +129,9 @@ abstract class Chomp extends SlapChop {
   // Map of Nodes to NodeProtocols for interacting with them
   def nodeProtocol: Map[Node, NodeProtocol]
 
-  // Method for serializing MapReduce queries
-  def serializeMapReduce[T, U](mapReduce: MapReduce[T, U]): String
-
-  // Method for deserializing MapReduce queries
-  def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _]
-
-  // Method for serializing MapReduce results
-  def serializeMapReduceResult(result: Any): Array[Byte]
-
-  // Method for deserializing MapReduce results
-  def deserializeMapReduceResult[T: TypeTag](result: Array[Byte]): T
-
   def run() {
     log.info(s"Starting chomp $Chomp.this on node $localNode ...")
-    hashRing.initialize(nodes keySet)
+    hashRing.initialize(nodes.keySet.to[immutable.Set])
 
     log.debug(s"Scheduling all database updates for $localNode $Chomp.this")
     for (database <- databases) {
@@ -284,51 +250,34 @@ abstract class Chomp extends SlapChop {
     pc
   }
 
-  override def mapReduce[T: TypeTag](catalog: String, database: String, keys: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]) = {
+  private def parSeq[T](s: Seq[T]) = {
+    val pc = s.par
+    val executionContext = ExecutionContext.fromExecutor(executor)
+    pc.tasksupport = new ExecutionContextTaskSupport(executionContext)
+    pc
+  }
+  
+  def mapReduce[T: TypeTag](catalog: String, database: String, keys: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T = {
     log.info(s"Received mapReduce request for $catalog / $database on $localNode $Chomp.this")
 
-    val blobDatabase = databases
-      .find { db => db.catalog.name == catalog && db.name == database }
-      .getOrElse { 
-        log.error(
-          s"Database $database not found on $localNode $Chomp.this",
-          throw new DatabaseNotFoundException("Database $database not found.")
-        )
-        throw new DatabaseNotFoundException("Database $database not found.")
-      }
+    val blobDatabase = databases.find { db => db.catalog.name == catalog && db.name == database } getOrElse {
+      throw new DatabaseNotFoundException("Database $database not found.")
+    }
 
     log.debug(s"Database $database located locally for mapReduce $mapReduce on $localNode $Chomp.this")
 
-    val servedVersion = servingVersions getOrElse (
-      blobDatabase,
-      {
-        log.error(
-          s"Database $blobDatabase.name not currently being served on $localNode $Chomp.this",
-          throw new DatabaseNotServedException(s"Database $blobDatabase.name not currently being served")
-        )
-        throw new DatabaseNotServedException(s"Database $blobDatabase.name not currently being served")
-      }
+    val servedVersion = servingVersions getOrElse (blobDatabase,
+      throw new DatabaseNotServedException(s"Database $blobDatabase.name not currently being served")
     )
 
     val version = servedVersion getOrElse {
-      log.error(
-        s"Shards for database $blobDatabase.name version not found on $localNode $Chomp.this",
-        throw new VersionNotFoundException(s"Shards for database $blobDatabase.name version not found on $localNode $Chomp.this")
-      )
       throw new VersionNotFoundException(s"Shards for database $blobDatabase.name version not found on $localNode $Chomp.this")
     }
 
     log.debug(s"Version $version of database $database located locally for mapReduce $mapReduce on $localNode $Chomp.this")
 
-    val numShards = numShardsPerVersion getOrElse (
-      (blobDatabase, version),
-      {
-        log.error(
-          s"Shards for database $blobDatabase.name version $version not found on $localNode $Chomp.this",
-          throw new ShardsNotFoundException(s"Shards for database $blobDatabase.name version $version not found on $localNode $Chomp.this")
-        )
-        throw new ShardsNotFoundException(s"Shards for database $blobDatabase.name version $version not found.")
-      }
+    val numShards = numShardsPerVersion getOrElse ((blobDatabase, version),
+      throw new ShardsNotFoundException(s"Shards for database $blobDatabase.name version $version not found.")
     )
 
     log.debug(s"numShards for database $database.name version $version for mapReduce $mapReduce found on $localNode $Chomp.this")
@@ -351,62 +300,44 @@ abstract class Chomp extends SlapChop {
     log.info(s"Performing mapReduce over $catalog / $database for $localNode $Chomp.this")
 
     parMap(keysToNodes) map { case (node, ids) =>
-      wrapErrors {
-        val serializedResult = nodeProtocol(node).mapReduce(catalog, database, version, ids, serializeMapReduce(mapReduce))
-        deserializeMapReduceResult[T](serializedResult)
-      }
+      wrapErrors { nodeProtocol(node).mapReduce(catalog, database, version, ids, mapReduce) }
     } reduce { (t1, t2) => 
-      wrapErrors {
-        mapReduce.reduce(t1, t2)
-      }
+      wrapErrors { mapReduce.reduce(t1, t2) }
     }
   }
 
   def partitionKeys(keys: Seq[Long], blobDatabase: Database, version: Long, numShards: Int): Map[Node, Seq[Long]] = {
     log.debug("Partitioning received keys for $blobDatabase.catalog.name / $blobDatabase.name / $version on $localNode $Chomp.this")
 
-    keys
-      .map { key => 
-        val shard = DatabaseVersionShard(
-          blobDatabase.catalog.name, 
-          blobDatabase.name, 
-          version, 
-          (key % numShards).toInt
-        )
-
-        val nodesServingShard = nodesContent filter { _._2 contains shard } keySet
-
-        val nodesAssignedShard = hashRing.getNodesForShard(shard.shard)
-
-        val nodesAvailableWithShard = nodesAssignedShard
-          .filter { n => (nodesServingShard contains n) && nodesAlive.getOrElse(n, false) }
-
-        (nodesAvailableWithShard.head, key)
+    val nodeToKey = keys map { key =>
+      val shard = DatabaseVersionShard(blobDatabase.catalog.name, blobDatabase.name, version, (key % numShards).toInt)
+      val nodesServingShard = nodesContent filter { _._2 contains shard } keySet
+      val nodesAssignedShard = hashRing.getNodesForShard(shard.shard)
+      val nodesAvailableWithShard = nodesAssignedShard filter { n => 
+        (nodesServingShard contains n) && nodesAlive.getOrElse(n, false) 
       }
-      .groupBy(_._1)
-      .map { case (node, seq) => (node, seq map { _._2 }) }
+      (nodesAvailableWithShard.head, key)
+    }
+    
+    nodeToKey
+      .groupBy { case (node, key) => node }
+      .mapValues { _ map { case (node, key) => key } }
   }
 
   def getNewerVersionNumber(database: Database): Option[Long] = {
     log.debug(s"Getting newer version number for database $database.name on $localNode $Chomp.this")
 
-    database
-      .versionedStore
-      .mostRecentVersion
-      .flatMap { latestRemoteVersion => 
-        localDB(database).versionedStore.mostRecentVersion match {
-          case Some(latestLocalVersion) =>
-            if (latestRemoteVersion > latestLocalVersion) Some(latestRemoteVersion)
-            else None
-          case None => Some(latestRemoteVersion)
-        }
+    database.versionedStore.mostRecentVersion.flatMap { latestRemoteVersion =>
+      localDB(database).versionedStore.mostRecentVersion match {
+        case Some(latestLocalVersion) =>
+          if (latestRemoteVersion > latestLocalVersion) Some(latestRemoteVersion)
+          else None
+        case None => Some(latestRemoteVersion)
       }
+    }
   }
 
-  def localDB(database: Database): Database = new Database (
-    new Catalog(database.catalog.name, rootDir),
-    database.name
-  )
+  private[server] def localDB(database: Database): Database = new Database (new Catalog(database.catalog.name, rootDir), database.name)
 
   def initializeAvailableShards() {
     log.debug(s"Initializing available shards for $localNode $Chomp.this")
@@ -455,49 +386,33 @@ abstract class Chomp extends SlapChop {
 
   def scheduleDatabaseUpdate(duration: Duration, database: Database) {
     log.debug(s"Scheduling database updates every $duration.length $duration.unit for database $database.name on $localNode $Chomp.this")
-
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateDatabase(database)
-      }
+    val task = new Runnable() {
+      override def run() { updateDatabase(database) }
     }
-
     executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleNodesAlive(duration: Duration) {
     log.debug(s"Scheduling nodesAlive updates every $duration.length $duration.unit on $localNode $Chomp.this")
-
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateNodesAlive()
-      }
+    val task = new Runnable() {
+      override def run() { updateNodesAlive() }
     }
-
     executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleNodesContent(duration: Duration) {
     log.debug(s"Scheduling nodesContent updates every $duration.length $duration.unit on $localNode $Chomp.this")
-
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateNodesContent()
-      }
+    val task = new Runnable() {
+      def run() { updateNodesContent() }
     }
-
     executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
   def scheduleServingVersions(duration: Duration) {
     log.debug(s"Scheduling servingVersions updates every $duration.length $duration.unit on $localNode $Chomp.this")
-
-    val task: Runnable = new Runnable() {
-      def run() {
-        updateServingVersions()
-      }
+    val task = new Runnable() {
+      def run() { updateServingVersions() }
     }
-
     executor.scheduleWithFixedDelay(task, 0L, duration.toMillis, MILLISECONDS)
   }
 
@@ -516,31 +431,23 @@ abstract class Chomp extends SlapChop {
     }
 
     log.debug(s"Deleting expired versions on $localNode $Chomp.this")
-    localDB(database)
-      .versionedStore
-      .cleanup(maxVersions)
+    localDB(database).versionedStore.cleanup(maxVersions)
   }
 
   def updateNodesAlive() {
     log.debug(s"Updating nodesAlive on $localNode $Chomp.this")
-    nodesAlive = nodes
-      .keys
-      .map( n => n -> nodeAlive.isAlive(n) )(breakOut)
+    nodesAlive = nodes.keys.map { n => n -> nodeAlive.isAlive(n) }(breakOut)
   }
 
   def updateNodesContent() {
     log.debug(s"Updating nodesContent on $localNode $Chomp.this")
-    nodesContent = nodes
-      .keys
-      .map { n => n -> databases
-        .map { db => nodeProtocol(n)
-          .availableShards(db.catalog.name, db.name)
-          .map { vs => DatabaseVersionShard(db.catalog.name, db.name, vs._1, vs._2) }
-        }
-        .flatten
-        .toSet
-      }
-      .toMap
+    nodesContent = nodes.keys map { n => 
+      n -> databases.flatMap { db => 
+             nodeProtocol(n).availableShards(db.catalog.name, db.name) map { vs => 
+               DatabaseVersionShard(db.catalog.name, db.name, vs._1, vs._2) 
+             }
+           }.toSet
+    } toMap 
   }
 
   def updateServingVersions() {
@@ -550,23 +457,18 @@ abstract class Chomp extends SlapChop {
       .map { db => (db.catalog.name, db.name) -> localDB(db).versionedStore.mostRecentVersion }
       .toMap
 
-    val latestShardsInNetwork = nodesContent
-      .values
-      .toList
-      .flatten
-      .filter { s => s.version == latestLocalVersions.getOrElse((s.catalog, s.database), -100) }
+    val latestShardsInNetwork = nodesContent.values.toList.flatten filter { s =>
+      s.version == latestLocalVersions.getOrElse((s.catalog, s.database), -100) 
+    }
     
     val shardsInNetworkByDBV = latestShardsInNetwork
       .groupBy { s => (s.catalog, s.database, s.version) }
       .map { case ((c, db, version), shardList) =>  ((c, db, version), shardList groupBy { _.shard }) }
       .toMap
 
-    val dbvToShardCounts = shardsInNetworkByDBV
-      .map { case ((c, db, version), shardMap) => (c, db, version) -> shardMap
-        .values
-        .map { s => s.size }
-        .filter { _ < replicationBeforeVersionUpgrade }
-      }
+    val dbvToShardCounts = shardsInNetworkByDBV map { case ((c, db, version), shardMap) => 
+      (c, db, version) -> shardMap.values.map { s => s.size }.filter { _ < replicationBeforeVersionUpgrade }
+    }
     
     dbvToShardCounts foreach { case ((c, db, version), shardCounts) =>
       if (shardCounts.size == 0) {

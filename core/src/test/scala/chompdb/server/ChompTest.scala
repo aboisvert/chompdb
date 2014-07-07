@@ -68,64 +68,9 @@ class ChompTest extends WordSpec with ShouldMatchers {
     override val nodesContentFreq = 1.minute 
     override val servingVersionsFreq = 1.minute   
     override val rootDir = tmpLocalRoot
-
-    override def serializeMapReduce[T, U](mapReduce: MapReduce[T, U]) = "identity"
-    
-    override def deserializeMapReduce(mapReduce: String): MapReduce[ByteBuffer, _] = mapReduce match {
-      case "identity" => new MapReduce[ByteBuffer, Seq[ByteBuffer]] {
-        def map(t: ByteBuffer) = Seq(t)
-        def reduce(t1: Seq[ByteBuffer], t2: Seq[ByteBuffer]): Seq[ByteBuffer] = t1 ++ t2
-      }
-    }
-
-    @throws(classOf[IOException])
-    override def serializeMapReduceResult(result: Any): Array[Byte] = {
-      val b = new ByteArrayOutputStream()
-      val o = new ObjectOutputStream(b)
-      o.writeObject(result)
-      o.flush()
-      o.close()
-      b.toByteArray()
-    }
-
-    @throws(classOf[IOException])
-    override def deserializeMapReduceResult[T: TypeTag](result: Array[Byte]): T = {
-      val b = new ByteArrayInputStream(result)
-      val o = new ObjectInputStream(b)
-      o.readObject().asInstanceOf[T]
-    }
   }
 
   "Chomp" should {
-    /* main method */
-
-  "serialize a MapReduce function to a string" in {
-    val mr = new MapReduce[ByteBuffer, Seq[ByteBuffer]] {
-      def map(t: ByteBuffer) = Seq(t)
-      def reduce(t1: Seq[ByteBuffer], t2: Seq[ByteBuffer]): Seq[ByteBuffer] = t1 ++ t2
-    }
-
-    chomp.serializeMapReduce[ByteBuffer, Seq[ByteBuffer]](mr) should be === "identity"
-  }
-
-  "deserialize a string to a MapReduce function" in {
-    val deserializedMR = chomp.deserializeMapReduce("identity")
-
-    val mr = new MapReduce[ByteBuffer, Seq[ByteBuffer]] {
-      def map(t: ByteBuffer) = Seq(t)
-      def reduce(t1: Seq[ByteBuffer], t2: Seq[ByteBuffer]): Seq[ByteBuffer] = t1 ++ t2
-    }
-
-    deserializedMR.isInstanceOf[MapReduce[ByteBuffer, Seq[ByteBuffer]]] should be === true
-  }
-
-  "serialize and deserialize a MapReduce result to and from a byte array" in {
-    val result = Seq(1, 2, 3)
-    val serializedResult = chomp.serializeMapReduceResult(result)
-    val deserializedResult = chomp.deserializeMapReduceResult[Seq[Int]](serializedResult)
-
-    deserializedResult should be === result
-  } 
 
     "given a database, reference a local version of that database" in {
       val database1Local = chomp.localDB(database1)

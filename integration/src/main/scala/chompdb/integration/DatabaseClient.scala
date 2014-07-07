@@ -6,10 +6,10 @@ import f1lesystem._
 import scala.concurrent.duration._
 import java.util.concurrent.atomic.AtomicBoolean
 import chompdb.server.MapReduce
-import chompdb.server.SlapChop
 import java.util.concurrent.ScheduledExecutorService
 import scala.concurrent.duration._
 import java.nio.ByteBuffer
+import chompdb.server.Chomp
 
 case class Result(
   versions: Set[Long],
@@ -36,7 +36,7 @@ trait DatabaseClient {
 
   val blocksPerQueryRange: (Int, Int)
 
-  val servers: Seq[SlapChop]
+  val servers: Seq[Chomp]
 
   val numClients: Int
 

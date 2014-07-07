@@ -7,7 +7,6 @@ import f1lesystem._
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Executors
 import scala.concurrent.duration._
-import chompdb.server.SlapChop
 
 object SmokeTest extends App {
   import Utils._
@@ -82,7 +81,7 @@ object SmokeTest extends App {
   val client = new DatabaseClient {
     override val delayBetweenQueries = 5.seconds
     override val blocksPerQueryRange: (Int, Int) = (1, 10)
-    override val servers: Seq[SlapChop] = SmokeTest.servers.values.toSeq
+    override val servers: Seq[Chomp] = SmokeTest.servers.values.toSeq
     override val numClients = 1
     override val params = SmokeTest.params
     override val scheduledExecutor: ScheduledExecutorService = Executors.newScheduledThreadPool(5)

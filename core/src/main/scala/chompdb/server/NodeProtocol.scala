@@ -12,6 +12,5 @@ import scala.collection._
 trait NodeProtocol {
   type VersionShard = (Long, Int)
   def availableShards(catalog: String, database: String): Set[VersionShard]
-  def mapReduce(catalog: String, database: String, version: Long,
-      ids: Seq[Long], mapReduce: String): Array[Byte]
+  def mapReduce[T](catalog: String, database: String, version: Long, ids: Seq[Long], mapReduce: MapReduce[ByteBuffer, T]): T
 }
